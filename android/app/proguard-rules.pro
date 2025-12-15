@@ -8,3 +8,11 @@
 #   http://developer.android.com/guide/developing/tools/proguard.html
 
 # Add any project specific keep options here:
+
+# Firebase keep rules (recommended to avoid stripping required classes)
+-keep class com.google.firebase.** { *; }
+-dontwarn com.google.firebase.**
+
+# Keep Play Services and common Google classes used by Firebase
+-keep class com.google.android.gms.** { *; }
+-dontwarn com.google.android.gms.**
