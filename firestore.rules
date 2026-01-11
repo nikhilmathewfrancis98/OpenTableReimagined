@@ -1,0 +1,108 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && 
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+    
+    function isVlogger() {
+      return isAuthenticated() && 
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'vlogger';
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function canEditPost(postId) {
+      return isAuthenticated() && 
+             (isAdmin() || 
+              isOwner(resource.data.authorId) ||
+              (isVlogger() && isOwner(resource.data.authorId)));
+    }
+
+    // Users collection
+    match /users/{userId} {
+      // Anyone can read their own profile
+      allow read, write: if isOwner(userId);
+      // Admins can read any user profile
+      allow read: if isAdmin();
+      // Admins can update any user (including roles)
+      allow write: if isAdmin();
+      // Anyone authenticated can create their own user profile
+      allow create: if isAuthenticated() && isOwner(userId);
+    }
+
+    // Posts collection
+    match /posts/{postId} {
+      // Anyone authenticated can read posts
+      allow read: if isAuthenticated();
+      // Vloggers and admins can create posts
+      allow create: if isVlogger() || isAdmin();
+      // Post owners can edit their own posts, admins can edit any post
+      allow update: if canEditPost(postId);
+      // Post owners can delete their own posts, admins can delete any post
+      allow delete: if canEditPost(postId);
+    }
+
+    // Comments collection (nested under posts)
+    match /posts/{postId}/comments/{commentId} {
+      // Anyone authenticated can read comments
+      allow read: if isAuthenticated();
+      // Any authenticated user can create comments
+      allow create: if isAuthenticated();
+      // Comment owners can edit their own comments
+      allow update: if isOwner(resource.data.authorId);
+      // Comment owners can delete their own comments, admins can delete any comment
+      allow delete: if isOwner(resource.data.authorId) || isAdmin();
+    }
+
+    // Reviews collection
+    match /reviews/{reviewId} {
+      // Anyone authenticated can read reviews
+      allow read: if isAuthenticated();
+      // Any authenticated user can create reviews
+      allow create: if isAuthenticated();
+      // Review owners can edit their own reviews
+      allow update: if isOwner(resource.data.authorId);
+      // Review owners can delete their own reviews, admins can delete any review
+      allow delete: if isOwner(resource.data.authorId) || isAdmin();
+    }
+
+    // Polls collection (nested under posts)
+    match /posts/{postId}/polls/{pollId} {
+      // Anyone authenticated can read polls
+      allow read: if isAuthenticated();
+      // Only post owners or admins can create/update/delete polls
+      allow write: if canEditPost(postId);
+    }
+
+    // Votes collection (for polls)
+    match /posts/{postId}/polls/{pollId}/votes/{voteId} {
+      // Anyone authenticated can read votes
+      allow read: if isAuthenticated();
+      // Users can only vote once per poll
+      allow create: if isAuthenticated() && 
+                     isOwner(resource.data.userId) &&
+                     !exists(/databases/$(database)/documents/posts/$(postId)/polls/$(pollId)/votes/$(request.auth.uid));
+      // Users can only update/delete their own votes
+      allow update, delete: if isOwner(resource.data.userId);
+    }
+
+    // Admin-only collections
+    match /admin/{documentId} {
+      allow read, write: if isAdmin();
+    }
+
+    // Deny all other access
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,9 +1,13 @@
 // Auth helpers using @react-native-firebase/auth when available.
 // Falls back to no-op if native modules aren't installed.
-import { auth, firestore } from './index';
+import auth from '@react-native-firebase/auth';
+import firestore from '@react-native-firebase/firestore';
 import { GoogleAuthProvider } from '@react-native-firebase/auth';
 
 type Unsubscribe = () => void;
+
+// const BACKEND_BASE = (globalThis as any)?.BACKEND_URL || 'http://10.123.36.249:4000';
+const BACKEND_BASE = "https://us-central1-studio-1307585505-5b6be.cloudfunctions.net/api";
 
 function isTransientError(err: any) {
     const code = err?.code || '';
@@ -48,14 +52,48 @@ async function retryable<T>(fn: () => Promise<T>, attempts = 2, delayMs = 300) {
 }
 
 export async function signIn(email: string, password: string): Promise<any | null> {
+    console.log('[auth] signIn function called with:', email);
     if (!auth) {
         console.warn('Auth module not initialized. Is @react-native-firebase/auth installed?');
         throw new Error('Auth not initialized');
     }
-
+    console.log('[auth] Testing server connection...');
     try {
-        const credential: any = await retryable(() => auth.signInWithEmailAndPassword(email, password));
-        return credential && credential.user ? credential.user : null;
+        const healthRes = await fetch('https://us-central1-studio-1307585505-5b6be.cloudfunctions.net/api/health');
+        console.log('[auth] Health response status:', healthRes.status);
+        const healthData = await healthRes.json();
+        console.log('[auth] Health check success:', healthData);
+    } catch (err) {
+        console.error('[auth] Health check failed:', err);
+    }
+    try {
+        console.log('[auth] signIn start', { email });
+        console.log('[auth] server signIn start', { email });
+
+        const res = await fetch(`${BACKEND_BASE}/api/auth/signin`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, password }),
+        });
+        console.log("Response from server: ", res);
+        const data = await res.json();
+        if (!res.ok) {
+            const msg = (data && (data.error || data.details || JSON.stringify(data))) || 'Sign in failed';
+            console.warn('[auth] server signIn failed', msg);
+            const e: any = new Error(msg);
+            e.code = data?.error?.code;
+            throw e;
+        }
+
+        const { customToken, uid } = data;
+        console.log('[auth] received customToken from server for uid=', uid);
+
+        // Sign in the Firebase client SDK with the custom token
+        const credential: any = await retryable(() => auth().signInWithCustomToken(customToken));
+        const user = credential && credential.user ? credential.user : null;
+        console.log('[auth] signIn with custom token success', { uid: user?.uid, email: user?.email });
+
+        return user;
     } catch (err: any) {
         const message = mapAuthError(err);
         const e: any = new Error(message);
@@ -64,6 +102,12 @@ export async function signIn(email: string, password: string): Promise<any | nul
     }
 }
 
+import { setDocumentNonBlocking } from './non-blocking-updates';
+import api from '../lib/api';
+
+// Backend base URL (override via global BACKEND_URL for devices)
+
+
 export async function signUp(email: string, password: string, profile: { username?: string; name?: string; roles?: string[] } = {}): Promise<any | null> {
     if (!auth) {
         console.warn('Auth module not initialized. Is @react-native-firebase/auth installed?');
@@ -71,27 +115,29 @@ export async function signUp(email: string, password: string, profile: { usernam
     }
 
     try {
-        const credential: any = await retryable(() => auth.createUserWithEmailAndPassword(email, password));
-        const user = credential && credential.user ? credential.user : null;
+        console.log('[auth] signUp start', { email, username: profile.username });
+        const res = await fetch(`${BACKEND_BASE}/api/auth/signup`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, password, username: profile.username, name: profile.name }),
+        });
 
-        // create users/{uid} profile document (best-effort)
-        if (user && firestore) {
-            try {
-                const userRef = firestore.collection('users').doc(user.uid);
-                const newUserProfile = {
-                    id: user.uid,
-                    email: user.email,
-                    username: profile.username || (user.displayName || '').replace(/\s+/g, '').toLowerCase() || '',
-                    name: profile.name || user.displayName || '',
-                    roles: profile.roles || ['user'],
-                    createdAt: firestore.FieldValue ? firestore.FieldValue.serverTimestamp() : null,
-                };
-                await userRef.set(newUserProfile);
-            } catch (e) {
-                // best-effort: don't fail signup if profile write fails
-                console.warn('Failed to create users profile after signUp', e);
-            }
+        const data = await res.json();
+        if (!res.ok) {
+            const msg = (data && (data.error || data.details || JSON.stringify(data))) || 'Sign up failed';
+            console.warn('[auth] server signUp failed', msg);
+            const e: any = new Error(msg);
+            e.code = data?.error?.code;
+            throw e;
         }
+
+        const { customToken, uid } = data;
+        console.log('[auth] received customToken from server for uid=', uid);
+
+        // Sign in the Firebase client SDK with the custom token
+        const credential: any = await retryable(() => auth().signInWithCustomToken(customToken));
+        const user = credential && credential.user ? credential.user : null;
+        console.log('[auth] signUp and signIn with custom token success', { uid: user?.uid, email: user?.email });
 
         return user;
     } catch (err: any) {
@@ -109,7 +155,7 @@ export async function signOut(): Promise<void> {
     }
 
     try {
-        await auth.signOut();
+        await auth().signOut();
     } catch (err) {
         console.warn('signOut error', err);
         throw err;
@@ -122,7 +168,7 @@ export function onAuthStateChanged(callback: (user: any | null) => void): Unsubs
         return () => { };
     }
 
-    const unsub = auth.onAuthStateChanged((user: any) => {
+    const unsub = auth().onAuthStateChanged((user: any) => {
         callback(user || null);
     });
 
@@ -176,3 +222,54 @@ export function initiateGoogleSignIn(): void {
 }
 
 export default { signIn, signOut, onAuthStateChanged };
+
+/**
+ * Returns the current user's ID token (JWT) which can be sent to backend services.
+ * If `forceRefresh` is true the SDK will refresh the token.
+ */
+export async function getIdToken(forceRefresh = false): Promise<string | null> {
+    try {
+        if (!auth) return null;
+        const user = auth().currentUser;
+        if (!user) {
+            console.log('[auth] getIdToken: No current user');
+            return null;
+        }
+
+        console.log('[auth] getIdToken called, forceRefresh=', forceRefresh, 'for user:', user.uid);
+
+        const token = await user.getIdToken(forceRefresh);
+
+        if (token) {
+            console.log('[auth] getIdToken success, token length=', token.length);
+            // Log basic token info (skip detailed parsing for React Native compatibility)
+            console.log('[auth] Token received successfully');
+        } else {
+            console.warn('[auth] getIdToken returned null token');
+        }
+
+        return token || null;
+    } catch (err: any) {
+        console.error('[auth] getIdToken error:', err);
+        // Log specific error types for better debugging
+        const errorCode = (err as any).code;
+        if (errorCode === 'auth/user-token-expired') {
+            console.error('[auth] Token expired, refresh needed');
+        } else if (errorCode === 'auth/user-disabled') {
+            console.error('[auth] User account disabled');
+        } else if (errorCode === 'auth/user-not-found') {
+            console.error('[auth] User not found');
+        }
+        return null;
+    }
+}
+
+/**
+ * Convenience helper returning an Authorization header value or null.
+ */
+export async function getAuthHeader(forceRefresh = false): Promise<string | null> {
+    const token = await getIdToken(forceRefresh);
+    const header = token ? `Bearer ${token}` : null;
+    console.log('[auth] getAuthHeader created', header ? '[REDACTED]' : null);
+    return header;
+}

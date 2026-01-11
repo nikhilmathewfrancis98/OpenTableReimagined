@@ -4,6 +4,7 @@ import useCollection from '../firebase/firestore/use-collection';
 import PostCard from '../components/post-card';
 import { useNavigation } from '@react-navigation/native';
 
+
 const PAGE_SIZE = 10;
 
 export default function HomeScreen() {
@@ -24,22 +25,29 @@ export default function HomeScreen() {
 
     if (loading && (!posts || posts.length === 0)) {
         return (
-            <View style={styles.center}>
-                <ActivityIndicator />
+            <View style={styles.container}>
+                <View style={styles.center}>
+                    <ActivityIndicator />
+                </View>
             </View>
         );
     }
 
     if (error) {
         return (
-            <View style={styles.center}>
-                <Text style={styles.error}>Error loading feed.</Text>
+            <View style={styles.container}>
+                <View style={styles.center}>
+                    <Text style={styles.error}>No feeds Yet</Text>
+                </View>
             </View>
         );
     }
 
     return (
         <View style={styles.container}>
+            <View style={styles.header}>
+                <Text style={styles.logo}>FlavorFeed</Text>
+            </View>
             <FlatList
                 data={posts}
                 keyExtractor={(item: any) => item.id || String(Math.random())}
@@ -63,6 +71,8 @@ export default function HomeScreen() {
 
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: '#f6f6f6' },
+    header: { padding: 12, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#eee' },
+    logo: { fontSize: 20, fontWeight: '700' },
     center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
     error: { color: 'red' },
     empty: { textAlign: 'center', marginTop: 24, color: '#666' },

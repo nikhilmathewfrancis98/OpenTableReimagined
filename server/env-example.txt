@@ -1,0 +1,8 @@
+# Firebase Configuration
+FIREBASE_API_KEY=your_firebase_api_key_here
+
+# Optional: If using service account file
+GOOGLE_APPLICATION_CREDENTIALS=./service-account.json
+
+# Server Port
+PORT=4000
